@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>中文字點陣轉換器（修正版）</title>
+  <style>
+    body { font-family: sans-serif; padding: 1em; background: #f4f4f4; }
+    textarea, input { width: 100%; font-size: 16px; margin-top: 0.5em; }
+    pre { background: #fff; padding: 1em; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h2>中文字轉 16×16 點陣字模</h2>
+  <p>請輸入中文字（可多個）：</p>
+  <textarea id="input" rows="3">古</textarea>
+  <button onclick="generate()">轉換</button>
+  <pre id="output"></pre>
+
+  <canvas id="canvas" width="16" height="16" style="display:none"></canvas>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const font = new FontFace("TaipeiSans", "url('https://raw.githubusercontent.com/max32002/micro-lantern-font/main/TaipeiSansTCBeta-Regular.ttf')");
+
+    font.load().then(function(loadedFont) {
+      document.fonts.add(loadedFont);
+    });
+
+    function getBitmap(char) {
+      ctx.clearRect(0, 0, 16, 16);
+      ctx.fillStyle = 'white';           // 背景白色
+      ctx.fillRect(0, 0, 16, 16);
+      ctx.fillStyle = 'black';           // 字體黑色
+      ctx.font = '16px TaipeiSans';
+      ctx.textBaseline = 'alphabetic';  // 改成 alphabetic
+      ctx.fillText(char, 0, 14);         // Y 軸下移 14px (16-2)
+
+      const imgData = ctx.getImageData(0, 0, 16, 16).data;
+      let bytes = [];
+
+      for (let y = 0; y < 16; y++) {
+        let left = 0, right = 0;
+        for (let x = 0; x < 8; x++) {
+          const i = (y * 16 + x) * 4;
+          const isOn = imgData[i] < 128;  // 判斷黑色
+          left = (left << 1) | (isOn ? 1 : 0);
+        }
+        for (let x = 8; x < 16; x++) {
+          const i = (y * 16 + x) * 4;
+          const isOn = imgData[i] < 128;
+          right = (right << 1) | (isOn ? 1 : 0);
+        }
+        bytes.push(left, right);
+      }
+      return bytes;
+    }
+
+    function generate() {
+      const chars = document.getElementById('input').value.trim();
+      let result = '';
+      for (const c of chars) {
+        const bytes = getBitmap(c);
+        result += `"${c}": [${bytes.join(", ")}],\n`;
+      }
+      document.getElementById('output').textContent = result;
+    }
+  </script>
+</body>
+</html>
