@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>中文點陣字轉換器（Y改18）</title>
+  <style>
+    body { font-family: sans-serif; padding: 2em; }
+    canvas { border: 1px solid #ccc; margin: 5px; }
+    textarea { width: 100%; height: 150px; font-size: 12px; }
+    .char-block { display: inline-block; margin: 10px; text-align: center; vertical-align: top; }
+  </style>
+</head>
+<body>
+  <h2>中文 16x16 點陣字轉換器（Y改18）</h2>
+  <p>請輸入文字（每個字會產生一組 16x16 的點陣字模）：</p>
+  <input type="text" id="inputText" style="width: 300px; font-size: 1.2em;" />
+  <button onclick="generateBitmaps()">產生點陣</button>
+  <button onclick="copyAllBitmaps()">複製全部字模</button>
+
+  <div id="output"></div>
+  <textarea id="allBitmaps" readonly></textarea>
+
+  <script>
+    const fontSize = 16;
+
+    function generateBitmaps() {
+      const text = document.getElementById("inputText").value;
+      const output = document.getElementById("output");
+      const allBitmaps = document.getElementById("allBitmaps");
+      output.innerHTML = "";
+      allBitmaps.value = "";
+
+      for (let char of text) {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 16;
+        const ctx = canvas.getContext("2d");
+
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, 16, 16);
+
+        ctx.font = fontSize + "px sans-serif";
+        ctx.textBaseline = "bottom";
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillStyle = "black";
+        ctx.fillText(char, 0, 18);  // Y座標改18
+
+        const imgData = ctx.getImageData(0, 0, 16, 16);
+        const data = imgData.data;
+        const bytes = [];
+
+        for (let y = 0; y < 16; y++) {
+          let byte1 = 0, byte2 = 0;
+          for (let x = 0; x < 8; x++) {
+            let idx = (y * 16 + x) * 4;
+            let r = data[idx], g = data[idx + 1], b = data[idx + 2];
+            let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+            let bit = (gray < 220) ? 1 : 0;
+            byte1 = (byte1 << 1) | bit;
+          }
+          for (let x = 8; x < 16; x++) {
+            let idx = (y * 16 + x) * 4;
+            let r = data[idx], g = data[idx + 1], b = data[idx + 2];
+            let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+            let bit = (gray < 220) ? 1 : 0;
+            byte2 = (byte2 << 1) | bit;
+          }
+          bytes.push(byte1, byte2);
+        }
+
+        const block = document.createElement("div");
+        block.className = "char-block";
+        block.innerHTML = `<div>${char}</div>`;
+        block.appendChild(canvas);
+
+        const textArea = document.createElement("textarea");
+        textArea.textContent = `"${char}": [${bytes.join(", ")}],`;
+        block.appendChild(textArea);
+
+        output.appendChild(block);
+        allBitmaps.value += `"${char}": [${bytes.join(", ")}],\n`;
+      }
+    }
+
+    function copyAllBitmaps() {
+      const allBitmaps = document.getElementById("allBitmaps");
+      allBitmaps.select();
+      allBitmaps.setSelectionRange(0, 99999);
+      document.execCommand("copy");
+      alert("已複製所有字模資料！");
+    }
+  </script>
+</body>
+</html>
