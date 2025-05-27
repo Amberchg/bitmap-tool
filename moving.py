@@ -5,6 +5,7 @@ import ujson
 from machine import Pin, I2C
 import ssd1306
 from c import CHARACTER_DATA  # 16x16中文字點陣字庫
+import gc  # 加在文件開頭的 import 部分
 
 # === Wi-Fi Settings ===
 SSID = 'C3PO-phone'
@@ -12,13 +13,18 @@ PASSWORD = 'iamthewifi'
 
 # === MOENV API Settings ===
 API_KEY = 'e8dd42e6-9b8b-43f8-991e-b3dee723a52d'
-MOENV_URL = f'https://data.moenv.gov.tw/api/v2/aqx_p_432?api_key={API_KEY}&limit=1000&sort=ImportDate%20desc&format=CSV'
+MOENV_URL = f'http://data.moenv.gov.tw/api/v2/aqx_p_432?api_key={API_KEY}&limit=1000&sort=ImportDate%20desc&format=CSV'  # 改用 http
 
 # === OLED Initialization ===
 i2c = I2C(0, scl=Pin(22), sda=Pin(21), freq=400000)
 oled_width = 128
 oled_height = 64
 oled = ssd1306.SSD1306_I2C(oled_width, oled_height, i2c)
+
+# === Telegram Settings ===
+BOT_TOKEN = '7995794320:AAH83WwN-5CVgfBBMAEkWC7K3kxXuQaH83M'
+CHAT_ID = '7643071691'
+TELEGRAM_URL = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
 
 def connect_wifi():
     wlan = network.WLAN(network.STA_IF)
@@ -35,47 +41,64 @@ def connect_wifi():
 def get_top10_aqi():
     try:
         print('Fetching AQI data...')
-        response = urequests.get(MOENV_URL)
-        if response.status_code == 200:
-            response_text = response.text
-            lines = response_text.split('\n')
-            if len(lines) < 3:
-                return []
-            cols = lines[2].split(',')
-            sitename_index = cols.index('sitename') if 'sitename' in cols else -1
-            aqi_index = cols.index('aqi') if 'aqi' in cols else -1
-            if sitename_index == -1 or aqi_index == -1:
-                print("Error: 'sitename' or 'aqi' column not found in CSV header.")
+        gc.collect()  # 清理記憶體
+        response = None
+        try:
+            response = urequests.get(MOENV_URL, stream=True)  # 使用串流模式
+            if response.status_code != 200:
+                print(f"Error: HTTP {response.status_code}")
                 return []
             
+            # 逐行處理數據
+            lines = []
+            header_found = False
+            sitename_index = -1
+            aqi_index = -1
             aqi_data = []
-            for line in lines[3:]:
-                if line.strip():
-                    fields = line.split(',')
-                    if len(fields) > max(sitename_index, aqi_index):
-                        sitename = fields[sitename_index].strip()
-                        # === 關鍵修正：將全形括號轉換為半形括號 ===
-                        sitename = sitename.replace('（', '(').replace('）', ')')
-                        # ============================================
-
-                        aqi_str = fields[aqi_index].strip()
-                        try:
-                            aqi = int(aqi_str) if aqi_str else 999
-                            aqi_data.append((sitename, aqi))
-                        except ValueError:
-                            continue
             
+            while True:
+                line = response.raw.readline()
+                if not line:
+                    break
+                    
+                try:
+                    line = line.decode().strip()
+                    if not header_found:
+                        if 'sitename' in line:
+                            cols = line.split(',')
+                            sitename_index = cols.index('sitename')
+                            aqi_index = cols.index('aqi')
+                            header_found = True
+                        continue
+                    
+                    if header_found and line:
+                        fields = line.split(',')
+                        if len(fields) > max(sitename_index, aqi_index):
+                            sitename = fields[sitename_index].strip()
+                            sitename = sitename.replace('（', '(').replace('）', ')')
+                            try:
+                                aqi = int(fields[aqi_index].strip())
+                                aqi_data.append((sitename, aqi))
+                            except (ValueError, IndexError):
+                                continue
+                except Exception as e:
+                    print(f"Line processing error: {e}")
+                    continue
+                    
             aqi_data.sort(key=lambda x: x[1])
             return aqi_data[:10]
-        else:
-            print(f"Error fetching AQI data: HTTP Status {response.status_code}")
+            
+        except Exception as e:
+            print(f"Request error: {e}")
             return []
+        finally:
+            if response:
+                response.close()
+            gc.collect()  # 再次清理記憶體
+                
     except Exception as e:
         print('Error fetching AQI:', e)
         return []
-    finally:
-        if 'response' in locals():
-            response.close()
 
 # === 中文字點陣繪製函式 ===
 def draw_character(data, x, y):
@@ -212,11 +235,73 @@ def slide_aqi_display_with_pause(aqi_list, title, pause_time=1, slide_speed=0.02
         # 更新索引，進入下一個迴圈時會顯示下一個項目
         current_item_index = next_idx
 
+def url_encode(text):
+    """Simple URL encoding for MicroPython"""
+    safe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
+    encoded = ""
+    for char in str(text):
+        if char in safe:
+            encoded += char
+        else:
+            # Convert to UTF-8 bytes and percent encode
+            for byte in char.encode('utf-8'):
+                encoded += f"%{byte:02X}"
+    return encoded
+
+def send_to_telegram(message):
+    """Send message to Telegram with error handling"""
+    if not message:
+        print('Error: Empty message')
+        return False
+    
+    try:
+        payload = {
+            'chat_id': CHAT_ID,
+            'text': message
+        }
+        headers = {'Content-Type': 'application/json'}
+        
+        print('Sending to Telegram...')
+        response = urequests.post(TELEGRAM_URL, 
+                                data=ujson.dumps(payload).encode('utf-8'),
+                                headers=headers)
+        
+        print('Response status:', response.status_code)
+        success = response.status_code == 200
+        response.close()
+        return success
+        
+    except Exception as e:
+        print('Error sending to Telegram:', e)
+        return False
+
+def format_aqi_message(aqi_list):
+    """Format AQI data with better presentation"""
+    try:
+        lines = ['空氣品質最佳城市排名：']
+        for idx, (site, aqi) in enumerate(aqi_list, 1):
+            lines.append(f'{idx}. {site} (AQI: {aqi})')
+        return '\n'.join(lines)
+    except Exception as e:
+        print('Error formatting:', e)
+        return "Error: Could not format AQI data"
+
 # --- 主程式 ---
+gc.collect()
 connect_wifi()
-top_aqi = get_top10_aqi()
+last_update = 0
 
-marquee_title = 'AQI最佳城市'
-
-# 呼叫新的滑動顯示函數
-slide_aqi_display_with_pause(top_aqi, marquee_title, pause_time=1, slide_speed=0.02, slide_steps=4)
+while True:
+    try:
+        current_time = time.time()
+        if current_time - last_update >= 1800:  # 30分鐘更新一次
+            if (data := get_top10_aqi()):
+                message = format_aqi_message(data)
+                if send_to_telegram(message):
+                    print("Data sent successfully")
+                slide_aqi_display_with_pause(data, 'AQI最佳城市', 1, 0.02, 4)
+                last_update = current_time
+        time.sleep(1)
+    except Exception as e:
+        print('Error in main loop:', e)
+        time.sleep(60)
